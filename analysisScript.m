@@ -10,20 +10,32 @@ NUM_SIGNALS = numel(fs);
 sf = 20000; %20kHz 
 currentStart = 2000;
 currentStop = 4000;
+
+
+
 %% Retrieve currents and volatges
 t_ms = ts.T1 * 1000;
 
 current_traces = nan(NUM_SIGNALS, numel(t_ms));
-currents = nan(NUM_SIGNALS, 1);
+og_currents = nan(NUM_SIGNALS, 1);
 voltages = nan(NUM_SIGNALS, numel(t_ms));
 
 for f = 1:NUM_SIGNALS
     rec = ts.(fs(f));
     current_traces(f, :) = rec(:, 1);
-    currents(f) = mean(current_traces(f, currentStart:currentStop)); 
+    og_currents(f) = mean(current_traces(f, currentStart:currentStop)); 
     voltages(f, :) = rec(:, 2);
 end
-
+%% Current correction term
+% Find the internal current 
+if false
+    stds = std(voltages, 0, 2);
+    neutral_current_ix = find(stds < 2);
+    compensatory_current = og_currents(neutral_current_ix);
+    
+    currents = og_currents - compensatory_current;
+    current_traces = current_traces - compensatory_current;
+end
 
 %%
 % Show the profile of the stimulation
@@ -88,6 +100,7 @@ rheobase_ix = find(currents == rheobase);
 zscored = zscore(voltages(:, currentStart:currentStop), 0,2); % look at how zscores represent the aps
 zscored_f = figure;
 num_spikes = nan(NUM_SIGNALS, 1);
+isi = nan(NUM_SIGNALS, 1);
 
 for i = 1:numel(ap_ixs)
     figure;
@@ -95,12 +108,16 @@ for i = 1:numel(ap_ixs)
     title(sprintf("Stimulation current is %1.2f nA",currents(f)));
 
     lmax = islocalmax(zscored(f, :)) & zscored(f,:) > 1;
+    % Calculate interspike interval (ms)
+    spike_ixs = find(lmax);
+    isi(f) = 1000*mean(diff(spike_ixs))/sf;
     num_spikes(f) = sum(lmax);
-    plot(zscored(f, :), 'Color', cmap(f, :), "DisplayName", sprintf("%1.2f nA",currents(f))); hold on; 
+    plot(t_ms(currentStart:currentStop), zscored(f, :), 'Color', cmap(f, :), "DisplayName", sprintf("%1.2f nA",currents(f))); hold on; 
     
     maxes = zscored(f, :);
     maxes(~lmax) = nan;
-    plot(maxes, "r*"); hold off;
+    plot(t_ms(currentStart:currentStop),maxes, "r*"); hold off;
+    xlabel("Time, ms");
 end
 
 
@@ -110,6 +127,7 @@ Threshold_voltage = voltages(rheobase_ix, biggest_der_ix);
 plot(biggest_der_ix / sf * 1000, Threshold_voltage, "DisplayName", "Threshold", "Marker","x", 'MarkerSize',8, 'Color','Black'); hold on;
 
 %% Calculate the firing rate
+% Interspike interval
 
 
 %% Calculate the tau (time constant) via finding 2/3 of the exponential decay

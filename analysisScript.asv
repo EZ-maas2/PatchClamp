@@ -10,19 +10,29 @@ NUM_SIGNALS = numel(fs);
 sf = 20000; %20kHz 
 currentStart = 2000;
 currentStop = 4000;
+
+
+
 %% Retrieve currents and volatges
 t_ms = ts.T1 * 1000;
 
 current_traces = nan(NUM_SIGNALS, numel(t_ms));
-currents = nan(NUM_SIGNALS, 1);
+og_currents = nan(NUM_SIGNALS, 1);
 voltages = nan(NUM_SIGNALS, numel(t_ms));
 
 for f = 1:NUM_SIGNALS
     rec = ts.(fs(f));
     current_traces(f, :) = rec(:, 1);
-    currents(f) = mean(current_traces(f, currentStart:currentStop)); 
+    og_currents(f) = mean(current_traces(f, currentStart:currentStop)); 
     voltages(f, :) = rec(:, 2);
 end
+%% Current correction term
+% Find the internal current 
+
+stds = std(voltages, 0, 2);
+neutral_current_ix = find(stds < 2);
+compensatory_current = currents(neutral_current_ix);
+currents = og_currents - compensatory_current;
 
 
 %%
@@ -85,19 +95,22 @@ rheobase_ix = find(currents == rheobase);
 % Threshold - sharp elbow where we go from slwoly charging to spiking
 [~,biggest_der_ix] = max(diff(diff(smoothed_voltages(rheobase_ix, :)))); % biggest second derivative
 %% Count the number of spikes
-zscored = zscore(voltages(:, currentStart:currentStop), 0,2); %look at how zscores represent the aps
+zscored = zscore(voltages(:, currentStart:currentStop), 0,2); % look at how zscores represent the aps
 zscored_f = figure;
-
+num_spikes = nan(NUM_SIGNALS, 1);
 
 for i = 1:numel(ap_ixs)
+    figure;
     f = ap_ixs(i);
+    title(sprintf("Stimulation current is %1.2f nA",currents(f)));
 
-    lmax = islocalmax(zscored(f, :)) & zsc;
+    lmax = islocalmax(zscored(f, :)) & zscored(f,:) > 1;
+    num_spikes(f) = sum(lmax);
     plot(zscored(f, :), 'Color', cmap(f, :), "DisplayName", sprintf("%1.2f nA",currents(f))); hold on; 
     
     maxes = zscored(f, :);
     maxes(~lmax) = nan;
-    plot(maxes, "r*"); hold on;
+    plot(maxes, "r*"); hold off;
 end
 
 

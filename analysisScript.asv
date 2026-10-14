@@ -11,12 +11,16 @@ sf = 20000; %20kHz
 currentStart = 2000;
 currentStop = 4000;
 %% Retrieve currents and volatges
+t_ms = ts.T1 * 1000;
+
+current_traces = nan(NUM_SIGNALS, numel(t_ms));
 currents = nan(NUM_SIGNALS, 1);
 voltages = nan(NUM_SIGNALS, numel(t_ms));
 
 for f = 1:NUM_SIGNALS
     rec = ts.(fs(f));
-    currents(f) = mean(rec(currentStart:currentStop, 1)); 
+    current_traces(f, :) = rec(:, 1);
+    currents(f) = mean(current_traces(f, currentStart:currentStop)); 
     voltages(f, :) = rec(:, 2);
 end
 
@@ -27,21 +31,17 @@ volt_f = figure;
 curr_f = figure;
 
 cmap = colormap(parula(15));
-t_ms = ts.T1 * 1000;
 
 for f = 1:NUM_SIGNALS
-    rec = ts.(fs(f));
-
-    currents(f) = mean(rec(2000:4000, 1)); %
-    voltages(f, :) = rec(:, 2);
-
+    
+ 
     %voltage
     figure(volt_f)
-    plot(t_ms, rec(:, 2), 'Color', cmap(f, :), "DisplayName", sprintf("%1.2f nA",currents(f))); hold on; 
+    plot(t_ms, voltages(f, :), 'Color', cmap(f, :), "DisplayName", sprintf("%1.2f nA",currents(f))); hold on; 
 
     %current
     figure(curr_f)
-    plot(t_ms, rec(:, 1), 'Color', cmap(f, :)); hold on; 
+    plot(t_ms, current_traces(f, :), 'Color', cmap(f, :)); hold on; 
     plot([200, 200], [- 0.3, 0.3], 'k--'); hold on;
     plot([100, 100], [- 0.3, 0.3], 'k--'); hold on;
 
@@ -58,8 +58,10 @@ xlabel("Time, ms");
 legend('Location','northeastoutside');
 
 %% Save figures
-exportgraphics(gcf, "Current.png")
-exportgraphics(gcf, replace(p, ".mat", "")+"_Voltage.png")
+figure(curr_f);
+exportgraphics(gcf, "Current.png");
+figure(volt_f);
+exportgraphics(gcf, replace(p, ".mat", "")+"_Voltage.png");
 
 
 %% Find the baseline values
@@ -67,14 +69,42 @@ baselines = mean(voltages(:, 1:currentStart), 2); % mean of rows, cause every ro
 smoothed_voltages = movmean(voltages, 100, 2); % 400 datapoints window = 20 ms smoothing
 
 
-% Find which voltage traces contain APs and how many APs they contain
-% What do we base our judgment on? Derivative (extremely big shoot up)
-
 %% Calculate the AP amplitude & threshold
 
 % Find the traces with APs
+ap_mask = false(NUM_SIGNALS, 1);
+for i = 1:NUM_SIGNALS
+    ap_mask(i) = sum(smoothed_voltages(i, :) >=  baselines(i) + 30) > 0;
+end
+ap_ixs = find(ap_mask);
 
-% Threshold - sharp elbow wher ewe go from slwoly charging to spiking
+% Out of all of them, select the one with the minimal current
+rheobase = min(currents(ap_mask)); % min current necessary to elicit a spike
+rheobase_ix = find(currents == rheobase);
+
+% Threshold - sharp elbow where we go from slwoly charging to spiking
+[~,biggest_der_ix] = max(diff(diff(smoothed_voltages(rheobase_ix, :)))); % biggest second derivative
+%% Count the number of spikes
+zscored = zscore(voltages(:, currentStart:currentStop), 0,2); %look at how zscores represent the aps
+zscored_f = figure;
+
+
+for i = 1:numel(ap_ixs)
+    f = ap_ixs(i);
+
+    lmax = islocalmax(zscored(f, :)) & zsc;
+    plot(zscored(f, :), 'Color', cmap(f, :), "DisplayName", sprintf("%1.2f nA",currents(f))); hold on; 
+    
+    maxes = zscored(f, :);
+    maxes(~lmax) = nan;
+    plot(maxes, "r*"); hold on;
+end
+
+
+%% Plot the threshold on the voltage figure
+figure(volt_f);
+Threshold_voltage = voltages(rheobase_ix, biggest_der_ix);
+plot(biggest_der_ix / sf * 1000, Threshold_voltage, "DisplayName", "Threshold", "Marker","x", 'MarkerSize',8, 'Color','Black'); hold on;
 
 %% Calculate the firing rate
 
@@ -127,4 +157,4 @@ if true
 end
 %% Calculate C as tau/R
 C = tau./R;
-%%
+%% Plot voltage traces, regions taken as dV/dt, intersections for the tau calculation and AP

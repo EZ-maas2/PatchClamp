@@ -64,20 +64,50 @@ figure(volt_f);
 exportgraphics(gcf, replace(p, ".mat", "")+"_Voltage.png");
 
 
-
 %% Find the baseline values
 baselines = mean(voltages(:, 1:currentStart), 2); % mean of rows, cause every row is a timeseries
 smoothed_voltages = movmean(voltages, 100, 2); % 400 datapoints window = 20 ms smoothing
 
 
-% Find which voltage traces contain APs and how many APs they contain
-% What do we base our judgment on? Derivative (extremely big shoot up)
-
 %% Calculate the AP amplitude & threshold
 
 % Find the traces with APs
+ap_mask = false(NUM_SIGNALS, 1);
+for i = 1:NUM_SIGNALS
+    ap_mask(i) = sum(smoothed_voltages(i, :) >=  baselines(i) + 30) > 0;
+end
+ap_ixs = find(ap_mask);
 
-% Threshold - sharp elbow wher ewe go from slwoly charging to spiking
+% Out of all of them, select the one with the minimal current
+rheobase = min(currents(ap_mask)); % min current necessary to elicit a spike
+rheobase_ix = find(currents == rheobase);
+
+% Threshold - sharp elbow where we go from slwoly charging to spiking
+[~,biggest_der_ix] = max(diff(diff(smoothed_voltages(rheobase_ix, :)))); % biggest second derivative
+%% Count the number of spikes
+zscored = zscore(voltages(:, currentStart:currentStop), 0,2); % look at how zscores represent the aps
+zscored_f = figure;
+num_spikes = nan(NUM_SIGNALS, 1);
+
+for i = 1:numel(ap_ixs)
+    figure;
+    f = ap_ixs(i);
+    title(sprintf("Stimulation current is %1.2f nA",currents(f)));
+
+    lmax = islocalmax(zscored(f, :)) & zscored(f,:) > 1;
+    num_spikes(f) = sum(lmax);
+    plot(zscored(f, :), 'Color', cmap(f, :), "DisplayName", sprintf("%1.2f nA",currents(f))); hold on; 
+    
+    maxes = zscored(f, :);
+    maxes(~lmax) = nan;
+    plot(maxes, "r*"); hold off;
+end
+
+
+%% Plot the threshold on the voltage figure
+figure(volt_f);
+Threshold_voltage = voltages(rheobase_ix, biggest_der_ix);
+plot(biggest_der_ix / sf * 1000, Threshold_voltage, "DisplayName", "Threshold", "Marker","x", 'MarkerSize',8, 'Color','Black'); hold on;
 
 %% Calculate the firing rate
 

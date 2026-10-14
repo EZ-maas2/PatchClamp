@@ -2,33 +2,46 @@
 %% Load in the timeseries
 [p,d] = uigetfile();
 ts = load(fullfile(d,p)); % Y entries contain the data abnout the current and volatge change
-%%
+%% Constants
+fs = string(fieldnames(ts));
+fs = fs(contains(fs, "Y"));
+NUM_SIGNALS = numel(fs);
+
 sf = 20000; %20kHz 
 currentStart = 2000;
+currentStop = 4000;
+%% Retrieve currents and volatges
+t_ms = ts.T1 * 1000;
+
+current_traces = nan(NUM_SIGNALS, numel(t_ms));
+currents = nan(NUM_SIGNALS, 1);
+voltages = nan(NUM_SIGNALS, numel(t_ms));
+
+for f = 1:NUM_SIGNALS
+    rec = ts.(fs(f));
+    current_traces(f, :) = rec(:, 1);
+    currents(f) = mean(current_traces(f, currentStart:currentStop)); 
+    voltages(f, :) = rec(:, 2);
+end
+
+
 %%
 % Show the profile of the stimulation
 volt_f = figure;
 curr_f = figure;
-fs = string(fieldnames(ts));
-fs = fs(contains(fs, "Y"));
+
 cmap = colormap(parula(15));
-t_ms = ts.T1 * 1000;
-currents = nan(numel(fs), 1);
-voltages = nan(numel(fs), numel(t_ms));
 
-for f = 1:numel(fs)
-    rec = ts.(fs(f));
-
-    currents(f) = mean(rec(2000:4000, 1)); %
-    voltages(f, :) = rec(:, 2);
-
+for f = 1:NUM_SIGNALS
+    
+ 
     %voltage
     figure(volt_f)
-    plot(t_ms, rec(:, 2), 'Color', cmap(f, :), "DisplayName", sprintf("%1.2f pA",currents(f))); hold on; 
+    plot(t_ms, voltages(f, :), 'Color', cmap(f, :), "DisplayName", sprintf("%1.2f nA",currents(f))); hold on; 
 
     %current
     figure(curr_f)
-    plot(t_ms, rec(:, 1), 'Color', cmap(f, :)); hold on; 
+    plot(t_ms, current_traces(f, :), 'Color', cmap(f, :)); hold on; 
     plot([200, 200], [- 0.3, 0.3], 'k--'); hold on;
     plot([100, 100], [- 0.3, 0.3], 'k--'); hold on;
 
@@ -36,31 +49,85 @@ for f = 1:numel(fs)
 
 end
 
-ylabel("Current, pA");
+ylabel("Current, nA");
 xlabel("Time, ms"); 
-exportgraphics(gcf, "Current.png")
 
 figure(volt_f)
 ylabel("Voltage, mV");
 xlabel("Time, ms"); 
 legend('Location','northeastoutside');
-exportgraphics(gcf, replace(p, ".mat", "")+"_Voltage.png")
+
+%% Save figures
+figure(curr_f);
+exportgraphics(gcf, "Current.png");
+figure(volt_f);
+exportgraphics(gcf, replace(p, ".mat", "")+"_Voltage.png");
+
 
 
 %% Find the baseline values
 baselines = mean(voltages(:, 1:currentStart), 2); % mean of rows, cause every row is a timeseries
-voltages = movmean(voltages, 200, 2); % 200 datapoints window = 10 ms smoothing
+smoothed_voltages = movmean(voltages, 100, 2); % 400 datapoints window = 20 ms smoothing
+
 
 % Find which voltage traces contain APs and how many APs they contain
-% What do we base our jusgmnet on? Derivative (extremely big shoot up)
+% What do we base our judgment on? Derivative (extremely big shoot up)
 
-%% Calculate the AP amplitude
+%% Calculate the AP amplitude & threshold
 
+% Find the traces with APs
+
+% Threshold - sharp elbow wher ewe go from slwoly charging to spiking
 
 %% Calculate the firing rate
-%% Calculate the tau (time constant) via fitting an exponential
-% tau = time at which two thirds of the signal has lost
 
 
-%% Calculate the Membrane resistance based on V-I graph
+%% Calculate the tau (time constant) via finding 2/3 of the exponential decay
+% tau = time at which two thirds of the signal has been lost
 
+[~, max_ix] = max(abs(smoothed_voltages - baselines), [], 2); % find teh biggest deviation from the baseline
+max_v = nan(NUM_SIGNALS, 1);
+two_thirds = nan(NUM_SIGNALS, 1);
+tau = nan(NUM_SIGNALS, 1);
+intersection_ixs = nan(NUM_SIGNALS, 1);
+
+for ix = 1:NUM_SIGNALS
+    max_v(ix) = smoothed_voltages(ix, max_ix(ix));
+    two_thirds(ix) = (max_v(ix) - baselines(ix)) * 2/3 + baselines(ix);
+
+    % find the intersection of voltages and the two_thirds
+    [~, intersection_ix] = min(abs(smoothed_voltages(ix, :) - two_thirds(ix)));
+    intersection_ixs(ix) = intersection_ix;
+    tau(ix) = intersection_ix / sf; % convert tau to seconds
+
+end
+
+
+
+%% Calculate the Membrane resistance R based on the segment of the voltage trace where dV/dt = 0 (all current is through R)
+
+stimulationSegment = smoothed_voltages(:, currentStart:currentStop);
+
+% take a row-wise temporal derivative - find dV/dt approx 0
+mask = [abs(diff(stimulationSegment, 1, 2)) < 0.01 false(NUM_SIGNALS, 1)]; % padded with logical 0 
+
+% only take last 25 ms of the stimulation window
+mask(1:round(3/4*numel(mask))) = false;
+
+% calculate R as mean voltage in places where dV/dt = 0 divided by
+% stimulation current
+R = mean(stimulationSegment .* mask, 2) ./ currents;
+
+
+% Plot the voltage traces with the regions that 
+if true
+    mask_f = figure();
+    for i = 1:NUM_SIGNALS
+        masked = stimulationSegment(i, :);
+        masked(mask(i,:)) = nan;
+        plot(masked); hold on;
+    end
+end
+%% Calculate C as tau/R
+C = tau./R;
+%% Plot voltage traces, regions taken as dV/dt, intersections for the tau calculation and AP

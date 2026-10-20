@@ -17,44 +17,42 @@ currentStop = 4000;
 t_ms = ts.T1 * 1000;
 
 current_traces = nan(NUM_SIGNALS, numel(t_ms));
-og_currents = nan(NUM_SIGNALS, 1);
+currents = nan(NUM_SIGNALS, 1);
 voltages = nan(NUM_SIGNALS, numel(t_ms));
 
 for f = 1:NUM_SIGNALS
     rec = ts.(fs(f));
     current_traces(f, :) = rec(:, 1);
-    og_currents(f) = mean(current_traces(f, currentStart:currentStop)); 
+    currents(f) = mean(current_traces(f, currentStart:currentStop)); 
     voltages(f, :) = rec(:, 2);
 end
 %% Current correction term
-% Find the internal current 
+% If the baseline was not zero, correct it to zero
+currents = currents - mean(current_traces(1:currentStart - 10));
 
-stds = std(voltages, 0, 2);
-neutral_current_ix = find(stds < 2);
-compensatory_current = currents(neutral_current_ix);
-currents = og_currents - compensatory_current;
-
-
+%% Color map
+cmap = colormap(parula(16));
 %%
 % Show the profile of the stimulation
 volt_f = figure;
 curr_f = figure;
 
-cmap = colormap(parula(15));
+
+ls  = {'--','-.','-','--','-.','-', '--','-.','-', '--','-.','-', '--','-.','-'};
+mk  = {'none','none','none','none','none','none', 'none','none','none','none','none','none','none','none','none'};%,'o','s','^', 'o','s','^', 'x','+','d'};
+
 
 for f = 1:NUM_SIGNALS
     
- 
     %voltage
     figure(volt_f)
-    plot(t_ms, voltages(f, :), 'Color', cmap(f, :), "DisplayName", sprintf("%1.2f nA",currents(f))); hold on; 
+    plot(t_ms, voltages(f, :), 'LineStyle',ls{f}, 'Marker',mk{f}, 'Color', cmap(f, :), "DisplayName", sprintf("ΔI = %1.2f nA",currents(f))); hold on; 
 
     %current
     figure(curr_f)
     plot(t_ms, current_traces(f, :), 'Color', cmap(f, :)); hold on; 
     plot([200, 200], [- 0.3, 0.3], 'k--'); hold on;
     plot([100, 100], [- 0.3, 0.3], 'k--'); hold on;
-
 
 
 end
@@ -69,58 +67,98 @@ legend('Location','northeastoutside');
 
 %% Save figures
 figure(curr_f);
-exportgraphics(gcf, "Current.png");
+exportgraphics(gcf, replace(p, ".mat", "")+"_Current.png");
 figure(volt_f);
 exportgraphics(gcf, replace(p, ".mat", "")+"_Voltage.png");
 
 
 %% Find the baseline values
 baselines = mean(voltages(:, 1:currentStart), 2); % mean of rows, cause every row is a timeseries
-smoothed_voltages = movmean(voltages, 100, 2); % 400 datapoints window = 20 ms smoothing
-
+smoothed_voltages = movmean(voltages, 10, 2); % 400 datapoints window = 0.5 ms smoothing
+Baseline.avg = mean(baselines);
+Baseline.std = std(baselines);
 
 %% Calculate the AP amplitude & threshold
-
 % Find the traces with APs
+zscored = zscore(voltages(:, currentStart:currentStop), 0, 2); % look at how zscores represent the aps
 ap_mask = false(NUM_SIGNALS, 1);
+neutral_mask = false(NUM_SIGNALS, 1);
 for i = 1:NUM_SIGNALS
-    ap_mask(i) = sum(smoothed_voltages(i, :) >=  baselines(i) + 30) > 0;
+    if std(voltages(i, :)) > 2 % if this is a non-neutral trace
+        ap_mask(i) = sum(zscored(i, :) > 1.5 & voltages(i, currentStart:currentStop) > baselines(i)) > 0; % if there are spikes
+    else
+        neutral_mask(i) = true;
+    end
 end
+
 ap_ixs = find(ap_mask);
 
 % Out of all of them, select the one with the minimal current
 rheobase = min(currents(ap_mask)); % min current necessary to elicit a spike
 rheobase_ix = find(currents == rheobase);
-
-% Threshold - sharp elbow where we go from slwoly charging to spiking
-[~,biggest_der_ix] = max(diff(diff(smoothed_voltages(rheobase_ix, :)))); % biggest second derivative
 %% Count the number of spikes
-zscored = zscore(voltages(:, currentStart:currentStop), 0,2); % look at how zscores represent the aps
-zscored_f = figure;
+
 num_spikes = nan(NUM_SIGNALS, 1);
+isi = nan(NUM_SIGNALS, 1);
+
+zscored_f = figure('Position', [100 100 1400 900],'WindowState', 'maximized');
+t = tiledlayout(numel(ap_ixs), 1, 'TileSpacing', 'compact', 'Padding', 'compact');
+spike_ixs = cell(NUM_SIGNALS, 1); 
 
 for i = 1:numel(ap_ixs)
-    figure;
+    nexttile;
     f = ap_ixs(i);
-    title(sprintf("Stimulation current is %1.2f nA",currents(f)));
 
     lmax = islocalmax(zscored(f, :)) & zscored(f,:) > 1;
+
+    % Calculate interspike interval (ms)
+    spike_ixs{f} = find(lmax);
+    isi(f) = 1000*mean(diff(spike_ixs{f}))/sf;
+
+
     num_spikes(f) = sum(lmax);
-    plot(zscored(f, :), 'Color', cmap(f, :), "DisplayName", sprintf("%1.2f nA",currents(f))); hold on; 
+    plot(t_ms(currentStart:currentStop), voltages(f, currentStart:currentStop), 'Color', cmap(f, :), "DisplayName",  sprintf("ΔI = %1.2f nA",currents(f))); hold on; 
     
-    maxes = zscored(f, :);
+    maxes = voltages(f, currentStart:currentStop);
     maxes(~lmax) = nan;
-    plot(maxes, "r*"); hold off;
+    plot(t_ms(currentStart:currentStop),maxes, "k*"); hold off;
+    xlabel("Time, ms");
+    ylabel("Voltage, mV")
+    title(sprintf("ΔI = %1.2f nA",currents(f)));
+    spike_ixs{f} = spike_ixs{f} + currentStart;
+
+end
+exportgraphics(gcf, replace(p, ".mat", "")+"_Spikes.png")
+
+%% Threshold - sharp elbow where we go from slowly charging to spiking
+
+% Do it for each spike
+spikes_in_rheobase = spike_ixs{rheobase_ix};
+threshold = nan(numel(spikes_in_rheobase), 1);
+biggest_der_ix = nan(numel(spikes_in_rheobase), 1);
+
+
+for ix = 1:numel(spikes_in_rheobase)
+    spike_ix = spikes_in_rheobase(ix); 
+    % search from 10ms before AP up to AP
+    ms2 = 2 * sf /1000;
+    window = voltages(rheobase_ix, spike_ix-ms2:spike_ix);
+    [~, bdix] = max(diff(diff(window)));
+    bdix = bdix - 5; % go 0.25 ms before, because second derivative underestimates 
+    threshold(ix) = window(bdix);
+    biggest_der_ix(ix) = spike_ix-ms2 + bdix - 1;
+    figure;
+    plot(window);hold on;
+    plot(bdix, window(bdix), "r*");
 end
 
-
+Threshold = min(threshold);
 %% Plot the threshold on the voltage figure
 figure(volt_f);
-Threshold_voltage = voltages(rheobase_ix, biggest_der_ix);
-plot(biggest_der_ix / sf * 1000, Threshold_voltage, "DisplayName", "Threshold", "Marker","x", 'MarkerSize',8, 'Color','Black'); hold on;
-
-%% Calculate the firing rate
-
+for i = 1:numel(biggest_der_ix)
+    tv = voltages(rheobase_ix, biggest_der_ix(i));
+    plot(t_ms(biggest_der_ix(i)), tv, "DisplayName", "Threshold", "Marker","x", 'MarkerSize',12, 'Color', 'Black');hold on;
+end
 
 %% Calculate the tau (time constant) via finding 2/3 of the exponential decay
 % tau = time at which two thirds of the signal has been lost
@@ -145,29 +183,87 @@ end
 
 
 %% Calculate the Membrane resistance R based on the segment of the voltage trace where dV/dt = 0 (all current is through R)
-
 stimulationSegment = smoothed_voltages(:, currentStart:currentStop);
 
-% take a row-wise temporal derivative - find dV/dt approx 0
+% take a row-wise temporal derivative of hyperpolarized segments - find dV/dt approx 0
+relevant_traces = ~neutral_mask & ~ap_mask;
+
 mask = [abs(diff(stimulationSegment, 1, 2)) < 0.01 false(NUM_SIGNALS, 1)]; % padded with logical 0 
+
 
 % only take last 25 ms of the stimulation window
 mask(1:round(3/4*numel(mask))) = false;
+mask(~relevant_traces) = false;
 
-% calculate R as mean voltage in places where dV/dt = 0 divided by
-% stimulation current
-R = mean(stimulationSegment .* mask, 2) ./ currents;
+dV = nan(NUM_SIGNALS, 1);
 
 
-% Plot the voltage traces with the regions that 
+% Plot the voltage traces with the regions that have dV/dt = 0
+time = t_ms(currentStart:currentStop);
 if true
-    mask_f = figure();
+    mask_f = figure;
     for i = 1:NUM_SIGNALS
         masked = stimulationSegment(i, :);
         masked(mask(i,:)) = nan;
-        plot(masked); hold on;
+
+        plot(time, masked, 'Color',cmap(i, :)); hold on;
+        plot(time(mask(i,:)), stimulationSegment(i, mask(i,:)), "r-.");
+        
+        % take voltages from dV/dt = 0 region
+        dV(i) = mean(stimulationSegment(i, mask(i,:)), 2);
     end
 end
+
+% calculate R as mean voltage in places where dV/dt = 0 divided by
+% stimulation current
+dV = dV - Baseline.avg;
+R = dV./ currents; % units are MOhm (10^6)
+
+%% Plot steady-state current-voltage relationship
+vi_fig = figure;
+title("I-V relationship");
+plot(currents, dV);
+xlabel("ΔI, nA");
+ylabel("ΔV, mV");
+exportgraphics(gcf, replace(p, ".mat", "")+"_IV.png")
+
+
 %% Calculate C as tau/R
 C = tau./R;
 %% Plot voltage traces, regions taken as dV/dt, intersections for the tau calculation and AP
+
+%% Combined Current-Voltage plot
+
+final_figure = figure('Position', [100 100 1400 900],'WindowState', 'maximized');
+title("Overview of the responses to the step currents");
+
+for f = 1:NUM_SIGNALS
+    %f = NUM_SIGNALS - s + 1;
+    %voltage
+    subplot(1, 5, [1, 3]);
+    plot(t_ms, voltages(f, :), 'LineStyle',ls{f}, 'Marker',mk{f}, 'Color', cmap(f, :), "DisplayName", sprintf("ΔI = %1.2f nA",currents(f))); hold on; 
+   
+
+    %current
+    subplot(1, 5, [4,5]);
+    plot(t_ms, current_traces(f, :), 'Color', cmap(f, :)); hold on; 
+    plot([200, 200], [- 0.3, 0.3], 'k--'); hold on;
+    plot([100, 100], [- 0.3, 0.3], 'k--'); hold on;
+
+
+end
+
+subplot(1, 5, [1, 3]);
+title("Voltage traces",'FontSize', 23);
+l = legend('Location','northeastoutside', 'FontSize', 12);
+ylabel("Voltage, mV",'FontSize', 18);
+xlabel("Time, ms",'FontSize', 18);
+
+subplot(1, 5, [4,5]);
+title("Step currents",'FontSize', 23);
+ylabel("Current, nA",'FontSize', 18);
+xlabel("Time, ms",'FontSize', 18); 
+
+
+
+
